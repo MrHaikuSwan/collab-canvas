@@ -9,7 +9,10 @@ interface ToolbarProps {
   onColorChange: (color: string) => void;
   onWidthChange: (width: number) => void;
   onToolChange: (tool: "pen" | "eraser") => void;
-  onReset: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 export default function Toolbar({
@@ -19,7 +22,10 @@ export default function Toolbar({
   onColorChange,
   onWidthChange,
   onToolChange,
-  onReset,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
 }: ToolbarProps) {
   return (
     <div className="absolute top-4 left-4 z-10 flex flex-col gap-3 rounded-lg bg-white/90 p-4 shadow-lg backdrop-blur-sm">
@@ -71,12 +77,30 @@ export default function Toolbar({
       </div>
 
       <div className="border-t border-gray-200 pt-3">
-        <button
-          onClick={onReset}
-          className="w-full rounded bg-red-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-600"
-        >
-          Reset Canvas
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            className={`flex-1 rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+              canUndo
+                ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            }`}
+          >
+            Undo
+          </button>
+          <button
+            onClick={onRedo}
+            disabled={!canRedo}
+            className={`flex-1 rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+              canRedo
+                ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            }`}
+          >
+            Redo
+          </button>
+        </div>
       </div>
     </div>
   );

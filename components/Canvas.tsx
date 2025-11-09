@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Pusher from "pusher-js";
 import { v4 as uuidv4 } from "uuid";
 import Toolbar from "./Toolbar";
+import MenuButton from "./MenuButton";
 import type { Stroke, Point } from "@/lib/types";
 
 export default function Canvas() {
@@ -17,6 +18,8 @@ export default function Canvas() {
   const channelRef = useRef<any>(null);
   const drawnStrokesRef = useRef<Set<string>>(new Set()); // Track which strokes we've already drawn
   const allStrokesRef = useRef<Stroke[]>([]); // Store all strokes so we can redraw after resize
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   // Clear the canvas
   const clearCanvas = () => {
@@ -35,6 +38,8 @@ export default function Canvas() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
     ctx.scale(dpr, dpr);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     // Clear stroke tracking
     drawnStrokesRef.current.clear();
@@ -86,6 +91,9 @@ export default function Canvas() {
         ctx.scale(dpr, dpr);
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
+        // Enable image smoothing for better anti-aliasing
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
       }
 
       // Redraw all strokes after resize
@@ -130,12 +138,30 @@ export default function Canvas() {
         drawnStrokesRef.current.add(stroke.id);
         // Store stroke so we can redraw after resize
         allStrokesRef.current.push(stroke);
+        updateUndoRedoState();
       }
     });
 
     // Bind to clear events
     channel.bind("clear", () => {
       clearCanvas();
+      updateUndoRedoState();
+    });
+
+    // Bind to undo events
+    channel.bind("undo", (data: { strokeId: string }) => {
+      removeStroke(data.strokeId);
+      updateUndoRedoState();
+    });
+
+    // Bind to redo events
+    channel.bind("redo", (data: { stroke: Stroke }) => {
+      if (!drawnStrokesRef.current.has(data.stroke.id)) {
+        drawStroke(data.stroke);
+        drawnStrokesRef.current.add(data.stroke.id);
+        allStrokesRef.current.push(data.stroke);
+        updateUndoRedoState();
+      }
     });
 
     // Fetch existing strokes and draw them
@@ -154,6 +180,7 @@ export default function Canvas() {
                 drawnStrokesRef.current.add(stroke.id);
               }
             });
+            updateUndoRedoState();
           }
         })
         .catch((error) => {
@@ -173,13 +200,101 @@ export default function Canvas() {
     };
   }, []);
 
-  // Draw a stroke on the canvas
+  // Update undo/redo button states
+  const updateUndoRedoState = () => {
+    fetch("/api/undo-redo-state")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.canUndo !== undefined) {
+          setCanUndo(data.canUndo);
+        }
+        if (data.canRedo !== undefined) {
+          setCanRedo(data.canRedo);
+        }
+      })
+      .catch(() => {
+        // Ignore errors for state updates
+      });
+  };
+
+  // Remove a stroke from the canvas by redrawing all other strokes
+  const removeStroke = (strokeId: string) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Remove from tracking
+    drawnStrokesRef.current.delete(strokeId);
+    allStrokesRef.current = allStrokesRef.current.filter((s) => s.id !== strokeId);
+
+    // Clear canvas and redraw all remaining strokes
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Clear the canvas by resetting transform and filling with white
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform completely
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Set the DPR scaling transform (same as resizeCanvas)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    // Redraw all remaining strokes
+    allStrokesRef.current.forEach((stroke) => {
+      drawStroke(stroke);
+    });
+  };
+
+  // Handle undo button click
+  const handleUndo = () => {
+    fetch("/api/undo", {
+      method: "POST",
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          // The undo event will come through Pusher and trigger removeStroke
+          updateUndoRedoState();
+        }
+      })
+      .catch((error) => {
+        console.error("Error undoing stroke:", error);
+      });
+  };
+
+  // Handle redo button click
+  const handleRedo = () => {
+    fetch("/api/redo", {
+      method: "POST",
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          // The redo event will come through Pusher and trigger drawStroke
+          updateUndoRedoState();
+        }
+      })
+      .catch((error) => {
+        console.error("Error redoing stroke:", error);
+      });
+  };
+
+  // Draw a stroke on the canvas (used for both local and remote strokes)
   const drawStroke = (stroke: Stroke) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // Enable image smoothing for consistent, smooth rendering
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     ctx.save();
 
@@ -193,17 +308,104 @@ export default function Canvas() {
     ctx.lineWidth = stroke.width;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
 
     if (stroke.points.length === 0) return;
 
     ctx.beginPath();
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-
-    for (let i = 1; i < stroke.points.length; i++) {
-      ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+    
+    if (stroke.points.length === 1) {
+      // Single point - draw a circle
+      ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (stroke.points.length === 2) {
+      // Two points - draw a simple line
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
+      ctx.stroke();
+    } else {
+      // Multiple points - use quadratic curves for smooth lines
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      
+      for (let i = 1; i < stroke.points.length - 1; i++) {
+        const curr = stroke.points[i];
+        const next = stroke.points[i + 1];
+        const midX = (curr.x + next.x) / 2;
+        const midY = (curr.y + next.y) / 2;
+        
+        ctx.quadraticCurveTo(curr.x, curr.y, midX, midY);
+      }
+      
+      // Draw to the last point
+      const last = stroke.points[stroke.points.length - 1];
+      const secondLast = stroke.points[stroke.points.length - 2];
+      ctx.quadraticCurveTo(secondLast.x, secondLast.y, last.x, last.y);
+      
+      ctx.stroke();
     }
+    
+    ctx.restore();
+  };
 
-    ctx.stroke();
+  // Draw current stroke smoothly (for local optimistic rendering)
+  const drawCurrentStroke = () => {
+    const points = currentStrokeRef.current;
+    if (points.length === 0) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Enable image smoothing
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    ctx.save();
+    if (tool === "eraser") {
+      ctx.globalCompositeOperation = "destination-out";
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = color;
+    }
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
+
+    ctx.beginPath();
+    
+    if (points.length === 1) {
+      // Single point - draw a circle
+      ctx.arc(points[0].x, points[0].y, width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (points.length === 2) {
+      // Two points - draw a simple line
+      ctx.moveTo(points[0].x, points[0].y);
+      ctx.lineTo(points[1].x, points[1].y);
+      ctx.stroke();
+    } else {
+      // Multiple points - use quadratic curves for smooth lines
+      ctx.moveTo(points[0].x, points[0].y);
+      
+      for (let i = 1; i < points.length - 1; i++) {
+        const curr = points[i];
+        const next = points[i + 1];
+        const midX = (curr.x + next.x) / 2;
+        const midY = (curr.y + next.y) / 2;
+        
+        ctx.quadraticCurveTo(curr.x, curr.y, midX, midY);
+      }
+      
+      // Draw to the last point
+      const last = points[points.length - 1];
+      const secondLast = points[points.length - 2];
+      ctx.quadraticCurveTo(secondLast.x, secondLast.y, last.x, last.y);
+      
+      ctx.stroke();
+    }
+    
     ctx.restore();
   };
 
@@ -287,6 +489,8 @@ export default function Canvas() {
       ctx.lineWidth = width;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
 
       ctx.beginPath();
       ctx.moveTo(lastPoint.x, lastPoint.y);
@@ -299,32 +503,35 @@ export default function Canvas() {
 
     currentStrokeRef.current.push(point);
 
-    // Draw locally (optimistic)
+    // Redraw the entire current stroke smoothly
+    // First, clear the area where we're drawing by redrawing all existing strokes
+    // Then draw the current stroke smoothly
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const points = currentStrokeRef.current;
-    if (points.length < 2) return;
-
-    ctx.save();
-    if (tool === "eraser") {
-      ctx.globalCompositeOperation = "destination-out";
-    } else {
-      ctx.globalCompositeOperation = "source-over";
-      ctx.strokeStyle = color;
-    }
-    ctx.lineWidth = width;
+    // Clear and redraw all strokes, then draw current stroke
+    // This ensures smooth rendering
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
-    ctx.beginPath();
-    ctx.moveTo(points[points.length - 2].x, points[points.length - 2].y);
-    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-    ctx.stroke();
-    ctx.restore();
+    // Redraw all existing strokes
+    allStrokesRef.current.forEach((stroke) => {
+      drawStroke(stroke);
+    });
+
+    // Draw current stroke smoothly
+    drawCurrentStroke();
   };
 
   const handlePointerUp = async () => {
@@ -386,6 +593,7 @@ export default function Canvas() {
         drawnStrokesRef.current.add(strokeToSend.id);
         // Store stroke so we can redraw after resize
         allStrokesRef.current.push(strokeToSend);
+        updateUndoRedoState();
       })
       .catch((error) => {
         console.error("Error broadcasting stroke:", error);
@@ -403,8 +611,12 @@ export default function Canvas() {
         onColorChange={setColor}
         onWidthChange={setWidth}
         onToolChange={setTool}
-        onReset={handleReset}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={canUndo}
+        canRedo={canRedo}
       />
+      <MenuButton onReset={handleReset} />
       <canvas
         ref={canvasRef}
         className="absolute inset-0 cursor-crosshair bg-white"
