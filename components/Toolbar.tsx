@@ -11,8 +11,10 @@ interface ToolbarProps {
   onToolChange: (tool: "pen" | "eraser") => void;
   onUndo: () => void;
   onRedo: () => void;
+  onClearMyChanges: () => void;
   canUndo: boolean;
   canRedo: boolean;
+  hasMyStrokes: boolean;
 }
 
 export default function Toolbar({
@@ -24,8 +26,10 @@ export default function Toolbar({
   onToolChange,
   onUndo,
   onRedo,
+  onClearMyChanges,
   canUndo,
   canRedo,
+  hasMyStrokes,
 }: ToolbarProps) {
   return (
     <div className="absolute top-4 left-4 z-10 flex flex-col gap-3 rounded-lg bg-white/90 p-4 shadow-lg backdrop-blur-sm">
@@ -101,6 +105,17 @@ export default function Toolbar({
             Redo
           </button>
         </div>
+        <button
+          onClick={onClearMyChanges}
+          disabled={!hasMyStrokes}
+          className={`mt-2 w-full rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+            hasMyStrokes
+              ? "bg-orange-500 text-white hover:bg-orange-600"
+              : "bg-gray-100 text-gray-400 cursor-not-allowed"
+          }`}
+        >
+          Clear My Changes
+        </button>
       </div>
     </div>
   );

@@ -1,31 +1,35 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getPusher } from "@/lib/pusher";
-import { redoStroke, canRedo } from "@/lib/strokes-store";
+import { StrokeSchema } from "@/lib/types";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
-    if (!canRedo()) {
+    const body = await request.json();
+    const { stroke } = body;
+
+    if (!stroke) {
       return NextResponse.json(
-        { error: "Nothing to redo" },
+        { error: "stroke is required" },
         { status: 400 }
       );
     }
 
-    const redoneStroke = redoStroke();
-    if (!redoneStroke) {
+    // Validate stroke
+    const validationResult = StrokeSchema.safeParse(stroke);
+    if (!validationResult.success) {
       return NextResponse.json(
-        { error: "Nothing to redo" },
+        { error: "Invalid stroke data", details: validationResult.error.issues },
         { status: 400 }
       );
     }
 
     // Broadcast redo event to all clients via Pusher
     const pusher = getPusher();
-    await pusher.trigger("room-global", "redo", { stroke: redoneStroke });
+    await pusher.trigger("room-global", "redo", { stroke: validationResult.data });
 
-    return NextResponse.json({ success: true, stroke: redoneStroke }, { status: 200 });
+    return NextResponse.json({ success: true, stroke: validationResult.data }, { status: 200 });
   } catch (error) {
-    console.error("Error redoing stroke:", error);
+    console.error("Error broadcasting redo:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

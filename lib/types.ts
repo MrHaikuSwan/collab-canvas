@@ -12,6 +12,7 @@ export interface Stroke {
   width: number; // px stroke width (1-48)
   tool: "pen" | "eraser";
   points: Point[]; // ordered points, max 2000
+  clientId?: string; // Optional: ID of the client that created this stroke
 }
 
 // Zod schema for validation
@@ -27,5 +28,6 @@ export const StrokeSchema = z.object({
   width: z.number().int().min(1).max(48),
   tool: z.enum(["pen", "eraser"]),
   points: z.array(PointSchema).min(1).max(2000),
+  clientId: z.string().uuid().optional(),
 });
 

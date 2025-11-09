@@ -19,6 +19,23 @@ export function clearStrokes(): void {
   redoStack.length = 0;
 }
 
+export function clearStrokesByClientId(clientId: string): Stroke[] {
+  const strokesToRemove = strokesStore.filter((s) => s.clientId === clientId);
+  // Remove strokes by mutating the array
+  for (let i = strokesStore.length - 1; i >= 0; i--) {
+    if (strokesStore[i].clientId === clientId) {
+      strokesStore.splice(i, 1);
+    }
+  }
+  // Also remove from redo stack
+  for (let i = redoStack.length - 1; i >= 0; i--) {
+    if (redoStack[i].clientId === clientId) {
+      redoStack.splice(i, 1);
+    }
+  }
+  return strokesToRemove;
+}
+
 export function undoStroke(): Stroke | null {
   if (strokesStore.length === 0) return null;
   
