@@ -22,8 +22,14 @@ export default function Canvas() {
   const [canRedo, setCanRedo] = useState(false);
   const [hasMyStrokes, setHasMyStrokes] = useState(false);
   const clientIdRef = useRef<string>(uuidv4()); // Unique ID for this client session
-  const localUndoStackRef = useRef<Stroke[]>([]); // Local undo stack for this client's strokes
-  const localRedoStackRef = useRef<Stroke[]>([]); // Local redo stack for this client's strokes
+  
+  // Undo/redo actions can be either a single stroke or a "clear" action (multiple strokes)
+  type UndoRedoAction = 
+    | { type: "stroke"; stroke: Stroke }
+    | { type: "clear"; strokes: Stroke[] };
+  
+  const localUndoStackRef = useRef<UndoRedoAction[]>([]); // Local undo stack for this client's actions
+  const localRedoStackRef = useRef<UndoRedoAction[]>([]); // Local redo stack for this client's actions
 
   // Clear the canvas
   const clearCanvas = () => {
@@ -146,7 +152,7 @@ export default function Canvas() {
         allStrokesRef.current.push(stroke);
         // Track in local undo stack if it's from this client
         if (stroke.clientId === clientIdRef.current) {
-          localUndoStackRef.current.push(stroke);
+          localUndoStackRef.current.push({ type: "stroke", stroke });
           // Clear redo stack when a new stroke is added
           localRedoStackRef.current = [];
         }
@@ -173,13 +179,15 @@ export default function Canvas() {
       
       // Update local stacks if this stroke was from this client
       if (stroke.clientId === clientIdRef.current) {
-        // Remove from undo stack
+        // Remove stroke action from undo stack
         localUndoStackRef.current = localUndoStackRef.current.filter(
-          (s) => s.id !== data.strokeId
+          (action) => action.type === "stroke" ? action.stroke.id !== data.strokeId : true
         );
         // Add to redo stack (if not already there)
-        if (!localRedoStackRef.current.find((s) => s.id === data.strokeId)) {
-          localRedoStackRef.current.push(stroke);
+        if (!localRedoStackRef.current.find(
+          (action) => action.type === "stroke" && action.stroke.id === data.strokeId
+        )) {
+          localRedoStackRef.current.push({ type: "stroke", stroke });
         }
       }
       updateUndoRedoState();
@@ -193,9 +201,9 @@ export default function Canvas() {
         allStrokesRef.current.push(data.stroke);
         // Update local stacks if this stroke was from this client
         if (data.stroke.clientId === clientIdRef.current) {
-          localUndoStackRef.current.push(data.stroke);
+          localUndoStackRef.current.push({ type: "stroke", stroke: data.stroke });
           localRedoStackRef.current = localRedoStackRef.current.filter(
-            (s) => s.id !== data.stroke.id
+            (action) => action.type === "stroke" ? action.stroke.id !== data.stroke.id : true
           );
         }
         updateUndoRedoState();
@@ -208,8 +216,8 @@ export default function Canvas() {
       removeStrokes(data.strokeIds);
       // Update local stacks if these were our strokes
       if (data.clientId === clientIdRef.current) {
-        localUndoStackRef.current = [];
-        localRedoStackRef.current = [];
+        // Don't modify undo/redo stacks here - handleClearMyChanges already handled it
+        // The clear action is already in the undo stack
       }
       updateUndoRedoState();
     });
@@ -230,7 +238,7 @@ export default function Canvas() {
                 drawnStrokesRef.current.add(stroke.id);
                 // Track in local undo stack if it's from this client
                 if (stroke.clientId === clientIdRef.current) {
-                  localUndoStackRef.current.push(stroke);
+                  localUndoStackRef.current.push({ type: "stroke", stroke });
                 }
               }
             });
@@ -333,45 +341,61 @@ export default function Canvas() {
     });
   };
 
-  // Handle undo button click - undo last stroke by this client
+  // Handle undo button click - undo last action by this client
   const handleUndo = () => {
-    // Find the last stroke created by this client from all strokes
-    const myStrokes = allStrokesRef.current.filter(
-      (s) => s.clientId === clientIdRef.current
-    );
+    if (localUndoStackRef.current.length === 0) return;
     
-    if (myStrokes.length === 0) {
-      // No strokes by this client to undo
-      return;
-    }
+    // Pop the last action from undo stack
+    const action = localUndoStackRef.current.pop()!;
     
-    // Find the most recent stroke by this client (last in array)
-    const strokeToUndo = myStrokes[myStrokes.length - 1];
-    
-    // Remove from all strokes
-    removeStroke(strokeToUndo.id);
-    
-    // Update local stacks
-    localUndoStackRef.current = localUndoStackRef.current.filter(
-      (s) => s.id !== strokeToUndo.id
-    );
-    // Add to redo stack (if not already there)
-    if (!localRedoStackRef.current.find((s) => s.id === strokeToUndo.id)) {
-      localRedoStackRef.current.push(strokeToUndo);
+    if (action.type === "clear") {
+      // Restore all cleared strokes
+      action.strokes.forEach((stroke) => {
+        if (!drawnStrokesRef.current.has(stroke.id)) {
+          drawStroke(stroke);
+          drawnStrokesRef.current.add(stroke.id);
+          allStrokesRef.current.push(stroke);
+        }
+      });
+      
+      // Move clear action to redo stack
+      localRedoStackRef.current.push(action);
+      
+      // Broadcast restore for each stroke (or we could create a restore endpoint)
+      action.strokes.forEach((stroke) => {
+        fetch("/api/broadcast", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(stroke),
+        }).catch((error) => {
+          console.error("Error broadcasting restored stroke:", error);
+        });
+      });
+    } else {
+      // Undo a single stroke
+      const strokeToUndo = action.stroke;
+      
+      // Remove from all strokes
+      removeStroke(strokeToUndo.id);
+      
+      // Move stroke action to redo stack
+      localRedoStackRef.current.push(action);
+      
+      // Broadcast undo event
+      fetch("/api/undo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ strokeId: strokeToUndo.id }),
+      }).catch((error) => {
+        console.error("Error broadcasting undo:", error);
+      });
     }
     
     updateUndoRedoState();
-    
-    // Broadcast undo event
-    fetch("/api/undo", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ strokeId: strokeToUndo.id }),
-    }).catch((error) => {
-      console.error("Error broadcasting undo:", error);
-    });
   };
 
   // Handle clear my changes button click
@@ -388,8 +412,14 @@ export default function Canvas() {
     // Remove all strokes by this client locally (single redraw)
     removeStrokes(strokeIds);
 
-    // Clear local undo/redo stacks
-    localUndoStackRef.current = [];
+    // Create a clear action and add it to undo stack
+    const clearAction: UndoRedoAction = {
+      type: "clear",
+      strokes: [...myStrokes], // Make a copy
+    };
+    localUndoStackRef.current.push(clearAction);
+
+    // Clear redo stack when a new action is added
     localRedoStackRef.current = [];
 
     updateUndoRedoState();
@@ -406,32 +436,56 @@ export default function Canvas() {
     });
   };
 
-  // Handle redo button click - redo last undone stroke by this client
+  // Handle redo button click - redo last undone action by this client
   const handleRedo = () => {
     if (localRedoStackRef.current.length === 0) return;
     
-    const strokeToRedo = localRedoStackRef.current.pop()!;
+    // Pop the last action from redo stack
+    const action = localRedoStackRef.current.pop()!;
     
-    // Add back to all strokes
-    if (!drawnStrokesRef.current.has(strokeToRedo.id)) {
-      drawStroke(strokeToRedo);
-      drawnStrokesRef.current.add(strokeToRedo.id);
-      allStrokesRef.current.push(strokeToRedo);
-      localUndoStackRef.current.push(strokeToRedo);
+    if (action.type === "clear") {
+      // Re-apply the clear action (remove all strokes again)
+      const strokeIds = action.strokes.map((s) => s.id);
+      removeStrokes(strokeIds);
+      
+      // Move clear action back to undo stack
+      localUndoStackRef.current.push(action);
+      
+      // Broadcast clear event
+      fetch("/api/clear-client-strokes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ clientId: clientIdRef.current }),
+      }).catch((error) => {
+        console.error("Error broadcasting clear:", error);
+      });
+    } else {
+      // Redo a single stroke
+      const strokeToRedo = action.stroke;
+      
+      // Add back to all strokes
+      if (!drawnStrokesRef.current.has(strokeToRedo.id)) {
+        drawStroke(strokeToRedo);
+        drawnStrokesRef.current.add(strokeToRedo.id);
+        allStrokesRef.current.push(strokeToRedo);
+        localUndoStackRef.current.push(action);
+      }
+      
+      // Broadcast redo event
+      fetch("/api/redo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ stroke: strokeToRedo }),
+      }).catch((error) => {
+        console.error("Error broadcasting redo:", error);
+      });
     }
     
     updateUndoRedoState();
-    
-    // Broadcast redo event
-    fetch("/api/redo", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ stroke: strokeToRedo }),
-    }).catch((error) => {
-      console.error("Error broadcasting redo:", error);
-    });
   };
 
   // Draw a stroke on the canvas (used for both local and remote strokes)
@@ -453,6 +507,7 @@ export default function Canvas() {
     } else {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = stroke.color;
+      ctx.fillStyle = stroke.color; // Set fillStyle for single-point strokes
     }
 
     ctx.lineWidth = stroke.width;
@@ -518,6 +573,7 @@ export default function Canvas() {
     } else {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = color;
+      ctx.fillStyle = color; // Set fillStyle for single-point strokes
     }
     ctx.lineWidth = width;
     ctx.lineCap = "round";
@@ -603,6 +659,7 @@ export default function Canvas() {
     } else {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = color;
+      ctx.fillStyle = color; // Set fillStyle for single-point strokes
     }
     ctx.lineWidth = width;
     ctx.lineCap = "round";
@@ -746,7 +803,7 @@ export default function Canvas() {
         allStrokesRef.current.push(strokeToSend);
         // Add to local undo stack (only strokes created by this client)
         if (strokeToSend.clientId === clientIdRef.current) {
-          localUndoStackRef.current.push(strokeToSend);
+          localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
           // Clear redo stack when a new stroke is added
           localRedoStackRef.current = [];
         }
