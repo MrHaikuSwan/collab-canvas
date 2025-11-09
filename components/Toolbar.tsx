@@ -132,10 +132,10 @@ export default function Toolbar({
         <button
           onClick={onClearMyChanges}
           disabled={!hasMyStrokes}
-          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all border-2 ${
             hasMyStrokes
-              ? "bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 shadow-lg shadow-orange-200 active:scale-95"
-              : "bg-gray-100 border-2 border-gray-200 text-gray-400 cursor-not-allowed"
+              ? "bg-gradient-to-r from-orange-500 to-red-500 text-white border-transparent hover:from-orange-600 hover:to-red-600 shadow-lg shadow-orange-200 active:scale-95"
+              : "bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed"
           }`}
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
