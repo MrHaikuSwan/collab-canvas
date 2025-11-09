@@ -150,11 +150,17 @@ export default function Canvas() {
         drawnStrokesRef.current.add(stroke.id);
         // Store stroke so we can redraw after resize
         allStrokesRef.current.push(stroke);
-        // Track in local undo stack if it's from this client
+        // Track in local undo stack if it's from this client and not already in undo stack
         if (stroke.clientId === clientIdRef.current) {
-          localUndoStackRef.current.push({ type: "stroke", stroke });
-          // Clear redo stack when a new stroke is added
-          localRedoStackRef.current = [];
+          // Check if this stroke is already in the undo stack (to prevent duplicates)
+          const alreadyInUndoStack = localUndoStackRef.current.some(
+            (action) => action.type === "stroke" && action.stroke.id === stroke.id
+          );
+          if (!alreadyInUndoStack) {
+            localUndoStackRef.current.push({ type: "stroke", stroke });
+            // Clear redo stack when a new stroke is added
+            localRedoStackRef.current = [];
+          }
         }
         updateUndoRedoState();
       }
@@ -797,17 +803,34 @@ export default function Canvas() {
       body: JSON.stringify(strokeToSend),
     })
       .then(() => {
-        // Mark this stroke as drawn so we don't redraw it when it comes back via Pusher
-        drawnStrokesRef.current.add(strokeToSend.id);
-        // Store stroke so we can redraw after resize
-        allStrokesRef.current.push(strokeToSend);
-        // Add to local undo stack (only strokes created by this client)
-        if (strokeToSend.clientId === clientIdRef.current) {
-          localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
-          // Clear redo stack when a new stroke is added
-          localRedoStackRef.current = [];
+        // Only process if we haven't already processed this stroke (e.g., from Pusher event)
+        if (!drawnStrokesRef.current.has(strokeToSend.id)) {
+          // Mark this stroke as drawn so we don't redraw it when it comes back via Pusher
+          drawnStrokesRef.current.add(strokeToSend.id);
+          // Store stroke so we can redraw after resize
+          allStrokesRef.current.push(strokeToSend);
+          // Add to local undo stack (only strokes created by this client)
+          if (strokeToSend.clientId === clientIdRef.current) {
+            localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
+            // Clear redo stack when a new stroke is added
+            localRedoStackRef.current = [];
+          }
+          updateUndoRedoState();
+        } else {
+          // Stroke was already processed (likely from Pusher event), just ensure it's in undo stack
+          if (strokeToSend.clientId === clientIdRef.current) {
+            // Check if this stroke is already in the undo stack (to prevent duplicates)
+            const alreadyInUndoStack = localUndoStackRef.current.some(
+              (action) => action.type === "stroke" && action.stroke.id === strokeToSend.id
+            );
+            if (!alreadyInUndoStack) {
+              localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
+              // Clear redo stack when a new stroke is added
+              localRedoStackRef.current = [];
+              updateUndoRedoState();
+            }
+          }
         }
-        updateUndoRedoState();
       })
       .catch((error) => {
         console.error("Error broadcasting stroke:", error);
