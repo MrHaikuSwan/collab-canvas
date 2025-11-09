@@ -39,12 +39,12 @@ export default function Canvas() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Clear the canvas by filling it with white
+    // Clear the canvas by filling it with a subtle off-white
     const dpr = window.devicePixelRatio || 1;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "white";
+    ctx.fillStyle = "#fafafa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
     ctx.scale(dpr, dpr);
@@ -294,11 +294,11 @@ export default function Canvas() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Clear the canvas by resetting transform and filling with white
+    // Clear the canvas by resetting transform and filling with subtle off-white
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform completely
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "white";
+    ctx.fillStyle = "#fafafa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     // Set the DPR scaling transform (same as resizeCanvas)
@@ -327,11 +327,11 @@ export default function Canvas() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Clear the canvas by resetting transform and filling with white
+    // Clear the canvas by resetting transform and filling with subtle off-white
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform completely
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "white";
+    ctx.fillStyle = "#fafafa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     // Set the DPR scaling transform (same as resizeCanvas)
@@ -730,7 +730,7 @@ export default function Canvas() {
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "white";
+    ctx.fillStyle = "#fafafa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.lineCap = "round";
@@ -858,7 +858,8 @@ export default function Canvas() {
       <MenuButton onReset={handleReset} />
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 cursor-crosshair bg-white"
+        className="absolute inset-0 cursor-crosshair"
+        style={{ backgroundColor: '#fafafa' }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
