@@ -747,20 +747,40 @@ export default function Canvas() {
     drawCurrentStroke();
   };
 
-  const handlePointerUp = async () => {
+  const handlePointerUp = async (e?: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
 
     setIsDrawing(false);
 
-    const points = currentStrokeRef.current;
-    if (points.length === 0) return;
+    let points = currentStrokeRef.current;
+    
+    // Fix: Ensure the last point is captured if pointer event is available
+    // This prevents the last point from disappearing
+    if (e && points.length > 0) {
+      const lastPoint = getPointFromEvent(e);
+      const lastStoredPoint = points[points.length - 1];
+      // Only add if it's different from the last stored point
+      if (lastPoint.x !== lastStoredPoint.x || lastPoint.y !== lastStoredPoint.y) {
+        points = [...points, lastPoint];
+      }
+    }
+    
+    if (points.length === 0) {
+      currentStrokeRef.current = [];
+      return;
+    }
 
     // Ensure points array doesn't exceed 2000
     let finalPoints = points;
     if (points.length > 2000) {
-      // Downsample: take every nth point
+      // Downsample: take every nth point, but always keep first and last
       const step = Math.ceil(points.length / 2000);
-      finalPoints = points.filter((_, i) => i % step === 0);
+      const downsampled = points.filter((_, i) => i % step === 0);
+      // Ensure last point is included
+      if (downsampled[downsampled.length - 1] !== points[points.length - 1]) {
+        downsampled.push(points[points.length - 1]);
+      }
+      finalPoints = downsampled;
     }
 
     // Create stroke object
@@ -783,14 +803,56 @@ export default function Canvas() {
     let payloadSize = estimateSize(strokeToSend);
     const MAX_SIZE = 10 * 1024; // 10KB
 
-    // If too large, downsample points
+    // If too large, downsample points (but always keep first and last)
     if (payloadSize > MAX_SIZE && finalPoints.length > 1) {
       let currentPoints = finalPoints;
       while (payloadSize > MAX_SIZE && currentPoints.length > 1) {
-        // Remove every other point
-        currentPoints = currentPoints.filter((_, i) => i % 2 === 0);
+        // Remove every other point, but always keep first and last
+        const filtered = currentPoints.filter((_, i) => i % 2 === 0);
+        // Ensure last point is included if it was removed
+        if (filtered[filtered.length - 1] !== currentPoints[currentPoints.length - 1]) {
+          filtered.push(currentPoints[currentPoints.length - 1]);
+        }
+        currentPoints = filtered;
         strokeToSend = { ...stroke, points: currentPoints };
         payloadSize = estimateSize(strokeToSend);
+      }
+    }
+
+    // Fix: Add stroke to tracking IMMEDIATELY to prevent double-drawing
+    // This ensures that when the Pusher event arrives, it won't redraw the stroke
+    drawnStrokesRef.current.add(strokeToSend.id);
+    allStrokesRef.current.push(strokeToSend);
+    if (strokeToSend.clientId === clientIdRef.current) {
+      localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
+      localRedoStackRef.current = [];
+    }
+    updateUndoRedoState();
+
+    // Clear current stroke ref before redrawing to prevent interference
+    currentStrokeRef.current = [];
+
+    // Clear the optimistic drawing and redraw with the final stroke
+    // This ensures consistency and prevents visual artifacts
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const dpr = window.devicePixelRatio || 1;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fafafa";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        // Redraw all strokes including the final version of the current stroke
+        allStrokesRef.current.forEach((stroke) => {
+          drawStroke(stroke);
+        });
       }
     }
 
@@ -803,40 +865,44 @@ export default function Canvas() {
       body: JSON.stringify(strokeToSend),
     })
       .then(() => {
-        // Only process if we haven't already processed this stroke (e.g., from Pusher event)
-        if (!drawnStrokesRef.current.has(strokeToSend.id)) {
-          // Mark this stroke as drawn so we don't redraw it when it comes back via Pusher
-          drawnStrokesRef.current.add(strokeToSend.id);
-          // Store stroke so we can redraw after resize
-          allStrokesRef.current.push(strokeToSend);
-          // Add to local undo stack (only strokes created by this client)
-          if (strokeToSend.clientId === clientIdRef.current) {
-            localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
-            // Clear redo stack when a new stroke is added
-            localRedoStackRef.current = [];
-          }
-          updateUndoRedoState();
-        } else {
-          // Stroke was already processed (likely from Pusher event), just ensure it's in undo stack
-          if (strokeToSend.clientId === clientIdRef.current) {
-            // Check if this stroke is already in the undo stack (to prevent duplicates)
-            const alreadyInUndoStack = localUndoStackRef.current.some(
-              (action) => action.type === "stroke" && action.stroke.id === strokeToSend.id
-            );
-            if (!alreadyInUndoStack) {
-              localUndoStackRef.current.push({ type: "stroke", stroke: strokeToSend });
-              // Clear redo stack when a new stroke is added
-              localRedoStackRef.current = [];
-              updateUndoRedoState();
-            }
-          }
-        }
+        // Stroke is already tracked above, so we don't need to do anything here
+        // The Pusher event handler will check drawnStrokesRef and skip drawing
       })
       .catch((error) => {
         console.error("Error broadcasting stroke:", error);
-      });
+        // On error, remove from tracking so it can be retried if needed
+        drawnStrokesRef.current.delete(strokeToSend.id);
+        allStrokesRef.current = allStrokesRef.current.filter((s) => s.id !== strokeToSend.id);
+        if (strokeToSend.clientId === clientIdRef.current) {
+          localUndoStackRef.current = localUndoStackRef.current.filter(
+            (action) => action.type === "stroke" ? action.stroke.id !== strokeToSend.id : true
+          );
+        }
+        updateUndoRedoState();
+        
+        // Redraw canvas without the failed stroke
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            const dpr = window.devicePixelRatio || 1;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#fafafa";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
 
-    currentStrokeRef.current = [];
+            // Redraw all remaining strokes
+            allStrokesRef.current.forEach((stroke) => {
+              drawStroke(stroke);
+            });
+          }
+        }
+      });
   };
 
   return (
